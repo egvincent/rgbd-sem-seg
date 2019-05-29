@@ -58,8 +58,9 @@ class CRPBlock(nn.Module):
     def __init__(self, in_planes, out_planes, n_stages):
         super(CRPBlock, self).__init__()
         for i in range(n_stages):
+            ### modified to use a conv3x3 instead of a conv1x1 from original Light Weight RefineNet
             setattr(self, '{}_{}'.format(i + 1, 'outvar_dimred'),
-                    conv1x1(in_planes if (i == 0) else out_planes,
+                    conv3x3(in_planes if (i == 0) else out_planes,
                             out_planes, stride=1,
                             bias=False))
         self.stride = 1
