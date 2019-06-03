@@ -51,23 +51,85 @@ from utils.getCameraParam import *
 from getHHA import *
 
 
+### modified to collapse the ~950 original classes to 40 classes, not 4
+### and to not put it in a color map format
 def process_ground_truth(ground_truth):
-    colors = dict()
-    colors["structure"] = _solarized.colors[5]
-    colors["prop"] = _solarized.colors[8]
-    colors["furniture"] = _solarized.colors[9]
-    colors["floor"] = _solarized.colors[1]
-    shape = list(ground_truth.shape) + [3]
+    ### added:
+    collapsed_classes = {
+        # void is already 0
+        "wall" : 1,
+        "floor" : 2,
+        "cabinet" : 3,
+        "bed" : 4,
+        "chair" : 5,
+        "sofa" : 6,
+        "table" : 7,
+        "door" : 8,
+        "window" : 9,
+        "bookshelf" : 10,
+        "picture" : 11,
+        "counter" : 12,
+        "blinds" : 13,
+        "desk" : 14,
+        "shelves" : 15,
+        "curtain" : 16,
+        "dresser" : 17,
+        "pillow" : 18,
+        "mirror" : 19,
+        "floor mat" : 20,
+        "clothes" : 21,
+        "ceiling" : 22,
+        "books" : 23,
+        "refridgerator" : 24,
+        "television" : 25,
+        "paper" : 26,
+        "towel" : 27,
+        "shower curtain" : 28,
+        "box" : 29,
+        "whiteboard" : 30,
+        "person" : 31,
+        "night stand" : 32,
+        "toilet" : 33,
+        "sink" : 34,
+        "lamp" : 35,
+        "bathtub" : 36,
+        "bag" : 37,
+        #"otherstructure" : 38,
+        #"otherfurniture" : 39,
+        #"otherprop" : 40
+    }
+    ###
+
+    ### anything commented out below is code I removed from the initial implementation
+    #colors = dict()
+    #colors["structure"] = _solarized.colors[5]
+    #colors["prop"] = _solarized.colors[8]
+    #colors["furniture"] = _solarized.colors[9]
+    #colors["floor"] = _solarized.colors[1]
+    shape = ground_truth.shape  # list(ground_truth.shape) + [3]
     img = np.ndarray(shape=shape, dtype=np.uint8)
     for i in xrange(shape[0]):
         for j in xrange(shape[1]):
             l = ground_truth[i, j]
-            if (l == 0):
-                img[i, j] = (0, 0, 0)  # background
+            #if (l == 0):
+            #    img[i, j] = (0, 0, 0)  # background
+            #else:
+                #name = classes[names[l - 1]]
+                #assert name in colors, name
+                #img[i, j] = colors[name]
+
+            name = names[l - 1]
+            class_name = classes[name]
+            if name in collapsed_classes:
+                img[i, j] = collapsed_classes[name]
+            elif class_name == "structure":
+                img[i, j] = 38
+            elif class_name == "furniture":
+                img[i, j] = 39
+            elif class_name == "prop":
+                img[i, j] = 40
             else:
-                name = classes[names[l - 1]]
-                assert name in colors, name
-                img[i, j] = colors[name]
+                img[i, j] = 0
     return img
 
 
@@ -120,7 +182,7 @@ def convert_image(i, scene, img_depth, image, label,   data_list_folder):
     png.from_array(img_depth, 'L;16').save(depth_image_filename)
 
     ### HHA processing added
-    # depth image is in millimeters, and we need meters, so divide by 1000 ...
+     depth image is in millimeters, and we need meters, so divide by 1000 ...
     D = img_depth / 1000.0  # lol
 
     HHA_depth_image_filename = "%s/%05d_depth_HHA.png" % (folder, i)
@@ -200,8 +262,6 @@ if __name__ == "__main__":
     labels = h5_file['labels']
     images = h5_file['images']
 
-    ### all instances of "unichr" replaced with "chr" for python 3.x compatibility
-        ### --- nvm using 2.7 now ...
     rawDepthFilenames = [u''.join(unichr(c) for c in h5_file[obj_ref]) for obj_ref in h5_file['rawDepthFilenames'][0]]
     names = [u''.join(unichr(c) for c in h5_file[obj_ref]) for obj_ref in h5_file['names'][0]]
     scenes = [u''.join(unichr(c) for c in h5_file[obj_ref]) for obj_ref in h5_file['sceneTypes'][0]]

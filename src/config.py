@@ -1,31 +1,31 @@
 import numpy as np
 
 # DATASET PARAMETERS
-TRAIN_DIR = '/datasets/nyud/'
+TRAIN_DIR = '/datasets/nyud-with-depth/'  ### old: /datasets/nyud/
 VAL_DIR = TRAIN_DIR
-TRAIN_LIST = ['./data/train.nyu'] * 3
-VAL_LIST = ['./data/val.nyu'] * 3
+TRAIN_LIST = ['./data/training.txt'] * 3  ### old: ./data/train.nyu
+VAL_LIST = ['./data/testing.txt'] * 3  ### old: ./data/val.nyu
 SHORTER_SIDE = [350] * 3
 CROP_SIZE = [500] * 3
 NORMALISE_PARAMS = [1./255, # SCALE
                     np.array([0.485, 0.456, 0.406]).reshape((1, 1, 3)), # MEAN
                     np.array([0.229, 0.224, 0.225]).reshape((1, 1, 3))] # STD
-BATCH_SIZE = [6] * 3
+BATCH_SIZE = [2] * 3   ### previously [6] * 3, might revert after testing
 NUM_WORKERS = 16
-NUM_CLASSES = [40] * 3
+NUM_CLASSES = [41] * 3  # 40 + void
 LOW_SCALE = [0.5] * 3
 HIGH_SCALE = [2.0] * 3
 IGNORE_LABEL = 255
 
 # ENCODER PARAMETERS
 ENC = '50'
-ENC_PRETRAINED = True  # pre-trained on ImageNet or randomly initialised
+ENC_PRETRAINED = False  #True  # pre-trained on ImageNet or randomly initialised   ### might revert after testing
 
 # GENERAL
 EVALUATE = False
 FREEZE_BN = [True] * 3
 NUM_SEGM_EPOCHS = [100] * 3
-PRINT_EVERY = 10
+PRINT_EVERY = 1  #10
 RANDOM_SEED = 42
 SNAPSHOT_DIR = './ckpt/'
 CKPT_PATH = './ckpt/checkpoint.pth.tar'
