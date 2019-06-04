@@ -157,8 +157,10 @@ class RefineNet(nn.Module):
     #     otherwise, 2 RCU blocks for LR only
     #   - fusion of HR and LR (if HR is provided)
     #   - CRP block + 1 RCU block for result of fusion (or LR if no HR provided)
-    def __init__(self, inplanes_lr, inplanes_hr=None):
+    def __init__(self, inplanes_lr, inplanes_hr=None, fancy_upsample=False):
         super(RefineNet, self).__init__()
+
+        self.fancy_upsample = fancy_upsample
         
         # first set of RCU blocks
         if inplanes_hr == None:
@@ -170,8 +172,11 @@ class RefineNet(nn.Module):
 
         # fusion
         if inplanes_hr != None:
-            self.mflow_conv_g1_b3_joint_varout_dimred = conv3x3(inplanes_lr, inplanes_hr, bias=False)
             self.adapt_stage2_b2_joint_varout_dimred = conv3x3(inplanes_hr, inplanes_hr, bias=False)
+            self.mflow_conv_g1_b3_joint_varout_dimred = conv3x3(inplanes_lr, inplanes_hr, bias=False)
+            if fancy_upsample:
+                # learnable upsample with a single (strided) transpose convolution (for now)
+                self.upsample = nn.ConvTranspose2d(inplanes_hr, inplanes_hr, kernel_size=3, stride=2, padding=1)
 
         # CRP and RCU for fusion result
         outplanes = inplanes_hr if inplanes_hr != None else inplanes_lr
@@ -214,7 +219,10 @@ class RefineNet(nn.Module):
         x = x_lr
         if x_hr is not None:
             x_lr = self.mflow_conv_g1_b3_joint_varout_dimred(x_lr)
-            x_lr = nn.Upsample(size=x_hr.size()[2:], mode='bilinear', align_corners=True)(x_lr)
+            if self.fancy_upsample:
+                x_lr = self.upsample(x_lr, output_size=x_hr.size())  # might have to do [2:]
+            else:
+                x_lr = nn.Upsample(size=x_hr.size()[2:], mode='bilinear', align_corners=True)(x_lr)
             
             x_hr = self.adapt_stage2_b2_joint_varout_dimred(x_hr)
             
@@ -343,9 +351,9 @@ class ResNet(nn.Module):
 
         # RefineNets
         self.RefineNet_l4 = RefineNet(inplanes_lr=512)  # no fusion step
-        self.RefineNet_l4_l3 = RefineNet(inplanes_lr=512, inplanes_hr=256)
-        self.RefineNet_l3_l2 = RefineNet(inplanes_lr=256, inplanes_hr=256)
-        self.RefineNet_l2_l1 = RefineNet(inplanes_lr=256, inplanes_hr=256)
+        self.RefineNet_l4_l3 = RefineNet(inplanes_lr=512, inplanes_hr=256, fancy_upsample=True)
+        self.RefineNet_l3_l2 = RefineNet(inplanes_lr=256, inplanes_hr=256, fancy_upsample=True)
+        self.RefineNet_l2_l1 = RefineNet(inplanes_lr=256, inplanes_hr=256, fancy_upsample=True)
 
         # CLF convolutional step applied to layer 1 output to get class predictions
         self.clf_conv = nn.Conv2d(256, num_classes, kernel_size=3, stride=1,
