@@ -193,15 +193,18 @@ class Normalise(object):
             respecitvely.
     """
 
-    def __init__(self, scale, mean, std):
+    def __init__(self, scale, mean, std, scale_d, mean_d, std_d):
         self.scale = scale
         self.mean = mean
         self.std = std
+        self.scale_depth = scale_d
+        self.mean_depth = mean_d
+        self.std_depth = std_d
 
     def __call__(self, sample):
         image, depth_image, mask = sample['image'], sample['depth_image'], sample['mask']
         image = (self.scale * image - self.mean) / self.std
-        depth_image = depth_image = (self.scale * depth_image - self.mean) / self.std
+        depth_image = (self.scale_depth * depth_image - self.mean_depth) / self.std_depth
         return {'image': image, 'depth_image': depth_image, 'mask': mask}
 
 ### modified to take HHA depth image as well

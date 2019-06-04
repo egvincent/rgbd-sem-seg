@@ -159,7 +159,7 @@ def create_loaders(
       crop_size (int) : square crop to apply during the training.
       low_scale (float) : lowest scale ratio for augmentations.
       high_scale (float) : highest scale ratio for augmentations.
-      normalise_params (list / tuple) : img_scale, img_mean, img_std.
+      normalise_params (list / tuple) : img_scale, img_mean, img_std, depth_scale, depth_meam, depth_std
       batch_size (int) : training batch size.
       num_workers (int) : number of workers to parallelise data loading operations.
       ignore_label (int) : label to pad segmentation masks with
@@ -178,7 +178,7 @@ def create_loaders(
     ## Transformations during training ##
     ### modified to take HHA depth image as well
     composed_trn = transforms.Compose([ResizeShorterScale(shorter_side, low_scale, high_scale),
-                                    Pad(crop_size, [123.675, 116.28 , 103.53], [110.0, 110.0, 110.0], ignore_label),
+                                    Pad(crop_size, [123.675, 116.28 , 103.53], [111.0, 113.0, 133.0], ignore_label),
                                     RandomMirror(),
                                     RandomCrop(crop_size),
                                     Normalise(*normalise_params),
