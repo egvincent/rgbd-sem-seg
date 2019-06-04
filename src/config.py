@@ -9,10 +9,10 @@ SHORTER_SIDE = [350] * 3
 CROP_SIZE = [500] * 3
 NORMALISE_PARAMS = [1./255, # SCALE
                     np.array([0.485, 0.456, 0.406]).reshape((1, 1, 3)), # MEAN
-                    np.array([0.229, 0.224, 0.225]).reshape((1, 1, 3))], # STD
-                    [1./255, # depth scale
+                    np.array([0.229, 0.224, 0.225]).reshape((1, 1, 3)), # STD
+                    1./255, # depth scale
                     np.array([0.440, 0.440, 0.520]).reshape((1, 1, 3)), # depth mean
-                    np.array([0.15, 0.270, 0.230]).reshape((1, 1, 3))], # depth std
+                    np.array([0.15, 0.270, 0.230]).reshape((1, 1, 3))] # depth std
 BATCH_SIZE = [2] * 3   ### previously [6] * 3, might revert after testing
 NUM_WORKERS = 16
 NUM_CLASSES = [41] * 3  # 40 + void
