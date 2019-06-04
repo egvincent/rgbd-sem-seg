@@ -19,7 +19,7 @@ IGNORE_LABEL = 255
 
 # ENCODER PARAMETERS
 ENC = '50'
-ENC_PRETRAINED = False  #True  # pre-trained on ImageNet or randomly initialised   ### might revert after testing
+ENC_PRETRAINED = True  # pre-trained on ImageNet or randomly initialised 
 
 # GENERAL
 EVALUATE = False

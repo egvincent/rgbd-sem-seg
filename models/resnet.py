@@ -427,15 +427,25 @@ class ResNet(nn.Module):
         return out
 
 
-### NOTE: for the following functions, I have changed the default value of pretrained
-###  from True to False. I might change it back later
+### new: use ImageNet pretrained weights for keys containing "_depth" as well
+### might help marginally
+def use_pretrained_depth_track(model_dict, pretrained_model_dict):
+    for key in model_dict:
+        if "_depth" in key:
+            pretrained_key = "".join(key.split("_depth"))
+            if pretrained_key in pretrained_model_dict:
+                model_dict[key] = pretrained_model_dict[pretrained_key]
 
-def rf_lw50(num_classes, imagenet=False, pretrained=False, **kwargs):
+### the functions below have been modified to call use_pretrained_depth_track
+
+def rf_lw50(num_classes, imagenet=False, pretrained=True, **kwargs):
     model = ResNet(Bottleneck, [3, 4, 6, 3], num_classes=num_classes, **kwargs)
     if imagenet:
         key = '50_imagenet'
         url = models_urls[key]
-        model.load_state_dict(maybe_download(key, url), strict=False)
+        pretrained_model_dict = maybe_download(key, url)
+        model.load_state_dict(pretrained_model_dict, strict=False)
+        use_pretrained_depth_track(model.state_dict(), pretrained_model_dict) ### new
     elif pretrained:
         dataset = data_info.get(num_classes, None)
         if dataset:
@@ -445,12 +455,14 @@ def rf_lw50(num_classes, imagenet=False, pretrained=False, **kwargs):
             model.load_state_dict(maybe_download(key, url), strict=False)
     return model
 
-def rf_lw101(num_classes, imagenet=False, pretrained=False, **kwargs):
+def rf_lw101(num_classes, imagenet=False, pretrained=True, **kwargs):
     model = ResNet(Bottleneck, [3, 4, 23, 3], num_classes=num_classes, **kwargs)
     if imagenet:
         key = '101_imagenet'
         url = models_urls[key]
-        model.load_state_dict(maybe_download(key, url), strict=False)
+        pretrained_model_dict = maybe_download(key, url)
+        model.load_state_dict(pretrained_model_dict, strict=False)
+        use_pretrained_depth_track(model.state_dict(), pretrained_model_dict) ### new
     elif pretrained:
         dataset = data_info.get(num_classes, None)
         if dataset:
@@ -460,12 +472,14 @@ def rf_lw101(num_classes, imagenet=False, pretrained=False, **kwargs):
             model.load_state_dict(maybe_download(key, url), strict=False)
     return model
 
-def rf_lw152(num_classes, imagenet=False, pretrained=False, **kwargs):
+def rf_lw152(num_classes, imagenet=False, pretrained=True, **kwargs):
     model = ResNet(Bottleneck, [3, 8, 36, 3], num_classes=num_classes, **kwargs)
     if imagenet:
         key = '152_imagenet'
         url = models_urls[key]
-        model.load_state_dict(maybe_download(key, url), strict=False)
+        pretrained_model_dict = maybe_download(key, url)
+        model.load_state_dict(pretrained_model_dict, strict=False)
+        use_pretrained_depth_track(model.state_dict(), pretrained_model_dict) ### new
     elif pretrained:
         dataset = data_info.get(num_classes, None)
         if dataset:
