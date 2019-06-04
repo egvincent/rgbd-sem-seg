@@ -138,61 +138,219 @@ class Bottleneck(nn.Module):
         return out
 
 
-### modified since original Light Weight RefineNet code to be no longer LW
-class ResNetLW(nn.Module):
+### This class was made to abstract the RefineNet code from the original
+### ResNet (originally ResNetLW) module into its own module. Further, I have
+### made the following modifications to convert from LW-RefineNet to RefineNet:
+###     - conv1x1 changed to conv3x3 in all lines ending in _varout_dimred, 
+###       which are part of the multi-resolution fusion blocks 
+###     - RCU blocks added
+###     - heavy reorganization, renaming, etc
+### I would like to rename the blocks in this module but I think the names are important for
+###   other parts of the code
+class RefineNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=21):
-        self.inplanes = 64
-        super(ResNetLW, self).__init__()
+    # inplanes_hr/lr are the number of channels of the high resolution input and
+    #   low resolution input respectively. if inplanes_hr is omitted, no fusion takes
+    #   place: this is useful for layer 4 in our case, to prep for fusing it with layer 3.
+    # the inputs will be passed through:
+    #   - if HR is provided: 2 RCU blocks for HR only
+    #     otherwise, 2 RCU blocks for LR only
+    #   - fusion of HR and LR (if HR is provided)
+    #   - CRP block + 1 RCU block for result of fusion (or LR if no HR provided)
+    def __init__(self, inplanes_lr, inplanes_hr=None):
+        super(RefineNet, self).__init__()
+        
+        # first set of RCU blocks
+        if inplanes_hr == None:
+            self.inplanes = inplanes_lr
+            self.rcu1_lr = self._make_layer(BasicBlock, planes=inplanes_lr, blocks=2)
+        else:
+            self.inplanes = inplanes_hr
+            self.rcu1_hr = self._make_layer(BasicBlock, planes=inplanes_hr, blocks=2)  
+
+        # fusion
+        if inplanes_hr != None:
+            self.mflow_conv_g1_b3_joint_varout_dimred = conv3x3(inplanes_lr, inplanes_hr, bias=False)
+            self.adapt_stage2_b2_joint_varout_dimred = conv3x3(inplanes_hr, inplanes_hr, bias=False)
+
+        # CRP and RCU for fusion result
+        outplanes = inplanes_hr if inplanes_hr != None else inplanes_lr
+        self.mflow_conv_g1_pool = self._make_crp(outplanes, outplanes, 4)
+        self.inplanes = outplanes
+        self.rcu2 = self._make_layer(BasicBlock, planes=outplanes, blocks=1)
+
+    # _make_layer and _make_crp copied from the ResNetLW class
+    
+    def _make_crp(self, in_planes, out_planes, stages):
+        layers = [CRPBlock(in_planes, out_planes,stages)]
+        return nn.Sequential(*layers)
+
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x_lr, x_hr=None):
+
+        # first set of RCU blocks
+        if x_hr is None:
+            x_lr = self.rcu1_lr(x_lr)
+        else:
+            x_hr = self.rcu1_hr(x_hr)
+
+        # fusion (or not)
+        x = x_lr
+        if x_hr is not None:
+            x_lr = self.mflow_conv_g1_b3_joint_varout_dimred(x_lr)
+            x_lr = nn.Upsample(size=x_hr.size()[2:], mode='bilinear', align_corners=True)(x_lr)
+            
+            x_hr = self.adapt_stage2_b2_joint_varout_dimred(x_hr)
+            
+            x = x_lr + x_hr
+            x = F.relu(x)
+
+        # CRP and RCU for fusion result
+        x = self.mflow_conv_g1_pool(x)  # CRP
+        x = self.rcu2(x)
+        
+        out = x
+        return out
+
+
+### added for RDFNet implementation
+class MMFNet(nn.Module):
+    
+    # in_channels will be 512 for MMFNet-4 and 256 for others, as per RDFNet paper
+    def __init__(self, in_channels):
+        super(MMFNet, self).__init__()
+        
         self.do = nn.Dropout(p=0.5)
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
-                               bias=False)
+
+        # these next blocks are the same for both RGB and HHA because 
+        #  the input volumes are exactly the same dimensions (including # channels)
+        # conv3 is also used for the convolution before and after fusion
+
+        # pre-fusion RGB blocks
+        self.conv1_rgb = conv1x1(in_planes=in_channels, out_planes=in_channels)
+        self.RCUs_rgb = nn.Sequential(  # 2 RCU blocks
+            BasicBlock(inplanes=in_channels, planes=in_channels),  # expansion=1, no downsampling
+            BasicBlock(inplanes=in_channels, planes=in_channels)   # expansion=1, no downsampling
+        )
+        self.conv3_rgb = conv3x3(in_planes=in_channels, out_planes=in_channels)
+
+        # pre-fusion HHA blocks
+        self.conv1_hha = conv1x1(in_planes=in_channels, out_planes=in_channels)
+        self.RCUs_hha = nn.Sequential(  # 2 RCU blocks
+            BasicBlock(inplanes=in_channels, planes=in_channels),  # expansion=1, no downsampling
+            BasicBlock(inplanes=in_channels, planes=in_channels)   # expansion=1, no downsampling
+        )
+        self.conv3_hha = conv3x3(in_planes=in_channels, out_planes=in_channels)
+
+        # post-fusion block
+        #self.maxpool = nn.MaxPool2d(kernel_size=5, stride=1)
+        #self.conv3 = conv3x3(in_planes=in_channels, out_planes=in_channels)
+        self.crp = CRPBlock(in_planes=in_channels, out_planes=in_channels, n_stages=1)
+
+    def forward(self, x_rgb, x_depth):
+        # pre-fusion RGB
+        x_rgb = self.do(x_rgb)
+        x_rgb = self.conv1_rgb(x_rgb)
+        x_rgb = self.RCUs_rgb(x_rgb)
+        x_rgb = self.conv3_rgb(x_rgb)
+
+        # pre-fusion HHA
+        x_depth = self.do(x_depth)
+        x_depth = self.conv1_hha(x_depth)
+        x_depth = self.RCUs_hha(x_depth)
+        x_depth = self.conv3_hha(x_depth)
+
+        # fusion
+        x = x_rgb + x_depth
+
+        # post-fusion
+        x = F.relu(x)
+        #residual = x
+        #x = self.maxpool(x)
+        #x = self.conv3(x)
+        #out = x + residual
+        out = self.crp(x)
+
+        return out
+
+
+### This module now represents the RDFNet
+### 
+### changes and additions to the original version of this class:
+###  - reorganization and commenting for clarity
+###  - RefineNet component isolated into its own RefineNet module: see above
+###  - to convert from RefineNet to RDFNet:
+###     - depth track added (all blocks ending in "_depth")
+###     - MMFNet added to fuse RGB and depth tracks
+class ResNet(nn.Module):
+
+    def __init__(self, block, layers, num_classes=40):#21):
+        super(ResNet, self).__init__()
+
+        self.do = nn.Dropout(p=0.5)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1_depth = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.bn1_depth = nn.BatchNorm2d(64)
+        #self.relu = nn.ReLU(inplace=True) -- switched to F.relu to avoid errors
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1) 
+
+        # backbone
+        self.inplanes = 64
         self.layer1 = self._make_layer(block, 64, layers[0])
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.inplanes = 64
+        self.layer1_depth = self._make_layer(block, 64, layers[0])
+        self.layer2_depth = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3_depth = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4_depth = self._make_layer(block, 512, layers[3], stride=2)
 
-        # conv1x1 changed to conv3x3 in the following blocks, in all lines ending
-        #  in _varout_dimred, which are part of the multi-resolution fusion blocks
-
-        self.p_ims1d2_outl1_dimred = conv1x1(2048, 512, bias=False)
-        self.mflow_conv_g1_pool = self._make_crp(512, 512, 4)
-        self.mflow_conv_g1_b3_joint_varout_dimred = conv3x3(512, 256, bias=False)
-        self.p_ims1d2_outl2_dimred = conv1x1(1024, 256, bias=False)
-        self.adapt_stage2_b2_joint_varout_dimred = conv3x3(256, 256, bias=False)
-        self.mflow_conv_g2_pool = self._make_crp(256, 256, 4)
-        self.mflow_conv_g2_b3_joint_varout_dimred = conv1x1(256, 256, bias=False)
-
-        self.p_ims1d2_outl3_dimred = conv1x1(512, 256, bias=False)
-        self.adapt_stage3_b2_joint_varout_dimred = conv3x3(256, 256, bias=False)
-        self.mflow_conv_g3_pool = self._make_crp(256, 256, 4)
-        self.mflow_conv_g3_b3_joint_varout_dimred = conv3x3(256, 256, bias=False)
-
-        self.p_ims1d2_outl4_dimred = conv1x1(256, 256, bias=False)
-        self.adapt_stage4_b2_joint_varout_dimred = conv3x3(256, 256, bias=False)
-        self.mflow_conv_g4_pool = self._make_crp(256, 256, 4)
-
-        self.clf_conv = nn.Conv2d(256, num_classes, kernel_size=3, stride=1,
-                                  padding=1, bias=True)
-
-        ### next lines of function not originally present in Light Weight RefineNet
+        # dimensionality reduction right off the backbone
+        # note that for some reason, x4 uses the outl1 block, x3 uses outl2, etc
+        # I would like to rename these as well, but I think the names are used for some other stuff
+        self.p_ims1d2_outl1_dimred = conv1x1(2048, 512, bias=False)  # really l4
+        self.p_ims1d2_outl2_dimred = conv1x1(1024, 256, bias=False)  # really l3
+        self.p_ims1d2_outl3_dimred = conv1x1(512, 256, bias=False)   # really l2
+        self.p_ims1d2_outl4_dimred = conv1x1(256, 256, bias=False)   # really l1
+        self.p_ims1d2_outl1_dimred_depth = conv1x1(2048, 512, bias=False)  # really l4
+        self.p_ims1d2_outl2_dimred_depth = conv1x1(1024, 256, bias=False)  # really l3
+        self.p_ims1d2_outl3_dimred_depth = conv1x1(512, 256, bias=False)   # really l2
+        self.p_ims1d2_outl4_dimred_depth = conv1x1(256, 256, bias=False)   # really l1
         
-        self.inplanes = 256
-        self.rcu1_l1 = self._make_layer(BasicBlock, planes=256, blocks=2)#512, blocks=2)
-        self.rcu1_l2 = self._make_layer(BasicBlock, planes=256, blocks=2)
-        self.rcu1_l3 = self._make_layer(BasicBlock, planes=256, blocks=2)
-        self.inplanes = 512
-        self.rcu1_l4 = self._make_layer(BasicBlock, planes=512, blocks=2)#256, blocks=2)
+        # MMFNets
+        self.MMFNet_l4 = MMFNet(in_channels=512)
+        self.MMFNet_l3 = MMFNet(in_channels=256)
+        self.MMFNet_l2 = MMFNet(in_channels=256)
+        self.MMFNet_l1 = MMFNet(in_channels=256)
 
-        self.inplanes = 256
-        self.rcu2_l1 = self._make_layer(BasicBlock, planes=256, blocks=1)#512, blocks=1)
-        self.rcu2_l2 = self._make_layer(BasicBlock, planes=256, blocks=1)
-        self.rcu2_l3 = self._make_layer(BasicBlock, planes=256, blocks=1)
-        self.inplanes = 512
-        self.rcu2_l4 = self._make_layer(BasicBlock, planes=512, blocks=1)#256, blocks=1)
+        # RefineNets
+        self.RefineNet_l4 = RefineNet(inplanes_lr=512)  # no fusion step
+        self.RefineNet_l4_l3 = RefineNet(inplanes_lr=512, inplanes_hr=256)
+        self.RefineNet_l3_l2 = RefineNet(inplanes_lr=256, inplanes_hr=256)
+        self.RefineNet_l2_l1 = RefineNet(inplanes_lr=256, inplanes_hr=256)
+
+        # CLF convolutional step applied to layer 1 output to get class predictions
+        self.clf_conv = nn.Conv2d(256, num_classes, kernel_size=3, stride=1,
+                                  padding=1, bias=True) 
+        
 
     def _make_crp(self, in_planes, out_planes, stages):
         layers = [CRPBlock(in_planes, out_planes,stages)]
@@ -215,78 +373,65 @@ class ResNetLW(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x):
+    def forward(self, x, x_depth):
         x = self.conv1(x)
         x = self.bn1(x)
-        x = self.relu(x)  # might be problematic in the future just like other one?
+        x = F.relu(x)
         x = self.maxpool(x)
+        x_depth = self.conv1_depth(x_depth)
+        x_depth = self.bn1_depth(x_depth)
+        x_depth = F.relu(x_depth)
+        x_depth = self.maxpool(x_depth)
 
+        # backbone
         l1 = self.layer1(x)
         l2 = self.layer2(l1)
         l3 = self.layer3(l2)
         l4 = self.layer4(l3)
+        l1_depth = self.layer1(x_depth)
+        l2_depth = self.layer2(l1_depth)
+        l3_depth = self.layer3(l2_depth)
+        l4_depth = self.layer4(l3_depth)
 
+        # not sure why this is only for l3 and l4, but it's in the original code
+        # so I added the same thing added for depth
         l4 = self.do(l4)
         l3 = self.do(l3)
+        l4_depth = self.do(l4_depth)
+        l3_depth = self.do(l3_depth)
 
-        x4 = self.p_ims1d2_outl1_dimred(l4)
-        ### added
-        x4 = self.rcu1_l4(x4)
-        ###
-        x4 = F.relu(x4)  #self.relu(x4)
-        x4 = self.mflow_conv_g1_pool(x4)  # CRP blocks
-        ### added:
-        x4 = self.rcu2_l4(x4)
-        ###
-        x4 = self.mflow_conv_g1_b3_joint_varout_dimred(x4)
-        x4 = nn.Upsample(size=l3.size()[2:], mode='bilinear', align_corners=True)(x4)
+        # dimensionality reduction right off the backbone
+        x4 = F.relu(self.p_ims1d2_outl1_dimred(l4))
+        x3 = F.relu(self.p_ims1d2_outl2_dimred(l3))
+        x2 = F.relu(self.p_ims1d2_outl3_dimred(l2))
+        x1 = F.relu(self.p_ims1d2_outl4_dimred(l1))
+        x4_depth = F.relu(self.p_ims1d2_outl1_dimred_depth(l4_depth))
+        x3_depth = F.relu(self.p_ims1d2_outl2_dimred_depth(l3_depth))
+        x2_depth = F.relu(self.p_ims1d2_outl3_dimred_depth(l2_depth))
+        x1_depth = F.relu(self.p_ims1d2_outl4_dimred_depth(l1_depth))
 
-        x3 = self.p_ims1d2_outl2_dimred(l3)
-        ### added:
-        x3 = self.rcu1_l3(x3)
-        ###
-        x3 = self.adapt_stage2_b2_joint_varout_dimred(x3)
-        x3 = x3 + x4
-        x3 = F.relu(x3)
-        x3 = self.mflow_conv_g2_pool(x3)  # CRP blocks
-        ### added:
-        x3 = self.rcu2_l3(x3)
-        ###
-        x3 = self.mflow_conv_g2_b3_joint_varout_dimred(x3)
-        x3 = nn.Upsample(size=l2.size()[2:], mode='bilinear', align_corners=True)(x3)
+        # MMFNets
+        x4 = self.MMFNet_l4(x4, x4_depth)
+        x3 = self.MMFNet_l3(x3, x3_depth)
+        x2 = self.MMFNet_l2(x2, x2_depth)
+        x1 = self.MMFNet_l1(x1, x1_depth)
 
-        x2 = self.p_ims1d2_outl3_dimred(l2)
-        ### added:
-        x2 = self.rcu1_l2(x2)
-        ###
-        x2 = self.adapt_stage3_b2_joint_varout_dimred(x2)
-        x2 = x2 + x3
-        x2 = F.relu(x2)
-        x2 = self.mflow_conv_g3_pool(x2)  # CRP blocks
-        ### added:
-        x2 = self.rcu2_l2(x2)
-        ###
-        x2 = self.mflow_conv_g3_b3_joint_varout_dimred(x2)
-        x2 = nn.Upsample(size=l1.size()[2:], mode='bilinear', align_corners=True)(x2)
+        # RefineNets
+        x4 = self.RefineNet_l4(x4)
+        x3 = self.RefineNet_l4_l3(x4, x3)
+        x2 = self.RefineNet_l3_l2(x3, x2)
+        x1 = self.RefineNet_l2_l1(x2, x1)
 
-        x1 = self.p_ims1d2_outl4_dimred(l1)
-        ### added:
-        x1 = self.rcu1_l1(x1)
-        ###
-        x1 = self.adapt_stage4_b2_joint_varout_dimred(x1)
-        x1 = x1 + x2
-        x1 = F.relu(x1)
-        x1 = self.mflow_conv_g4_pool(x1)  # CRP blocks
-        ### added:
-        x1 = self.rcu2_l1(x1)
-        ###
-
+        # CLF convolutional step to x1 to get class predictions
         out = self.clf_conv(x1)
         return out
 
 
-def rf_lw50(num_classes, imagenet=False, pretrained=True, **kwargs):
-    model = ResNetLW(Bottleneck, [3, 4, 6, 3], num_classes=num_classes, **kwargs)
+### NOTE: for the following functions, I have changed the default value of pretrained
+###  from True to False. I might change it back later
+
+def rf_lw50(num_classes, imagenet=False, pretrained=False, **kwargs):
+    model = ResNet(Bottleneck, [3, 4, 6, 3], num_classes=num_classes, **kwargs)
     if imagenet:
         key = '50_imagenet'
         url = models_urls[key]
@@ -300,8 +445,8 @@ def rf_lw50(num_classes, imagenet=False, pretrained=True, **kwargs):
             model.load_state_dict(maybe_download(key, url), strict=False)
     return model
 
-def rf_lw101(num_classes, imagenet=False, pretrained=True, **kwargs):
-    model = ResNetLW(Bottleneck, [3, 4, 23, 3], num_classes=num_classes, **kwargs)
+def rf_lw101(num_classes, imagenet=False, pretrained=False, **kwargs):
+    model = ResNet(Bottleneck, [3, 4, 23, 3], num_classes=num_classes, **kwargs)
     if imagenet:
         key = '101_imagenet'
         url = models_urls[key]
@@ -315,8 +460,8 @@ def rf_lw101(num_classes, imagenet=False, pretrained=True, **kwargs):
             model.load_state_dict(maybe_download(key, url), strict=False)
     return model
 
-def rf_lw152(num_classes, imagenet=False, pretrained=True, **kwargs):
-    model = ResNetLW(Bottleneck, [3, 8, 36, 3], num_classes=num_classes, **kwargs)
+def rf_lw152(num_classes, imagenet=False, pretrained=False, **kwargs):
+    model = ResNet(Bottleneck, [3, 8, 36, 3], num_classes=num_classes, **kwargs)
     if imagenet:
         key = '152_imagenet'
         url = models_urls[key]

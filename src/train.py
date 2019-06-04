@@ -125,6 +125,11 @@ def get_arguments():
                         help="Optimiser algorithm for decoder.")
     return parser.parse_args()
 
+### `pretrained` is whether or not you want to use imagenet. this means
+### something entirely different from the argument `pretrained` of rf_lw50, rf_lw101,
+### and rf_lw152, which is whether or not you want to use a pretrained model (default: True).
+### TODO: rename and add option to not use pretrained at all
+###     -> for now, just hardcoding `pretrained` to False in rf_lw50, etc
 def create_segmenter(
     net, pretrained, num_classes
     ):
@@ -171,8 +176,9 @@ def create_loaders(
     from datasets import Pad, RandomCrop, RandomMirror, ResizeShorterScale, ToTensor, Normalise
 
     ## Transformations during training ##
+    ### modified to take HHA depth image as well
     composed_trn = transforms.Compose([ResizeShorterScale(shorter_side, low_scale, high_scale),
-                                    Pad(crop_size, [123.675, 116.28 , 103.53], ignore_label),
+                                    Pad(crop_size, [123.675, 116.28 , 103.53], [110.0, 110.0, 110.0], ignore_label),
                                     RandomMirror(),
                                     RandomCrop(crop_size),
                                     Normalise(*normalise_params),
@@ -264,13 +270,22 @@ def train_segmenter(
     batch_time = AverageMeter()
     losses = AverageMeter()
     for i, sample in enumerate(train_loader):
+        #print("[train_segmenter] starting with sample " + str(i)) #############
+        #print("[train_segmenter] sample['image'] shape: " + str(sample['image'].shape)) #############
+        #print("[train_segmenter] sample['depth_image'] shape: " + str(sample['depth_image'].shape)) #############
         start = time.time()
         input = sample['image'].cuda()
+        depth_input = sample['depth_image'].cuda()
         target = sample['mask'].cuda()
         input_var = torch.autograd.Variable(input).float()
+        depth_input_var = torch.autograd.Variable(depth_input).float()
         target_var = torch.autograd.Variable(target).long()
+        #print("[train_segmenter] input_var shape: " + str(input_var.size())) ###############
+        #print("[train_segmenter] depth_input_var shape: " + str(depth_input_var.size())) ##########
         # Compute output
-        output = segmenter(input_var)
+        #print("[train_segmenter] computing output")  #############
+        output = segmenter(input_var, depth_input_var)
+        #print("[train_segmenter] done computing output") ##########
         output = nn.functional.interpolate(output, size=target_var.size()[1:], mode='bilinear', align_corners=False)
         soft_output = nn.LogSoftmax()(output)
         # Compute loss and backpropagate
@@ -311,10 +326,12 @@ def validate(
         for i, sample in enumerate(val_loader):
             start = time.time()
             input = sample['image']
+            depth_input = sample['depth_image']
             target = sample['mask']
             input_var = torch.autograd.Variable(input).float().cuda()
+            depth_input_var = torch.autograd.Variable(depth_input).float().cuda()
             # Compute output
-            output = segmenter(input_var)
+            output = segmenter(input_var, depth_input_var)
             output = cv2.resize(output[0, :num_classes].data.cpu().numpy().transpose(1, 2, 0),
                                 target.size()[1:][::-1],
                                 interpolation=cv2.INTER_CUBIC).argmax(axis=2).astype(np.uint8)
@@ -347,6 +364,10 @@ def main():
     torch.backends.cudnn.deterministic = True
     torch.manual_seed(args.random_seed)
     if torch.cuda.is_available():
+        print("cuda available -----------------")############
+        print("cuda device: " + str(torch.cuda.current_device())) ###########
+        print("cuda device name: " + torch.cuda.get_device_name(torch.cuda.current_device())) ########
+        print("---------------------------------")############
         torch.cuda.manual_seed_all(args.random_seed)
     np.random.seed(args.random_seed)
     random.seed(args.random_seed)
@@ -358,8 +379,8 @@ def main():
                 .format(args.enc, args.enc_pretrained, compute_params(segmenter) / 1e6))
     ## Restore if any ##
     best_val, epoch_start = load_ckpt(args.ckpt_path, {'segmenter' : segmenter})
-    ## Criterion ##
-    segm_crit = nn.NLLLoss2d(ignore_index=args.ignore_label).cuda()
+    ## Criterion ##    ### formerly NLLLoss2d (deprecated)
+    segm_crit = nn.NLLLoss(ignore_index=args.ignore_label).cuda()
 
     ## Saver ##
     saver = Saver(args=vars(args),
@@ -403,6 +424,7 @@ def main():
                                                  args.wd_enc[task_idx], args.wd_dec[task_idx],
                                                  enc_params, dec_params, args.optim_dec)
         for epoch in range(args.num_segm_epochs[task_idx]):
+            print("training segmenter, epoch: " + str(epoch)) ##################
             train_segmenter(segmenter, train_loader,
                             optim_enc, optim_dec,
                             epoch_start, segm_crit,
