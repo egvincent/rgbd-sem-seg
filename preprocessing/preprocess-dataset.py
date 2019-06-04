@@ -182,7 +182,7 @@ def convert_image(i, scene, img_depth, image, label,   data_list_folder):
     png.from_array(img_depth, 'L;16').save(depth_image_filename)
 
     ### HHA processing added
-     depth image is in millimeters, and we need meters, so divide by 1000 ...
+    # depth image is in millimeters, and we need meters, so divide by 1000 ...
     D = img_depth / 1000.0  # lol
 
     HHA_depth_image_filename = "%s/%05d_depth_HHA.png" % (folder, i)
