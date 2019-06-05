@@ -173,7 +173,7 @@ def create_loaders(
     from torch.utils.data import DataLoader, random_split
     # Custom libraries
     from datasets import NYUDataset as Dataset
-    from datasets import Pad, RandomCrop, RandomMirror, ResizeShorterScale, ToTensor, Normalise
+    from datasets import Pad, RandomCrop, RandomMirror, ResizeShorterScale, ToTensor, Normalise, RGBCutout
 
     ## Transformations during training ##
     ### modified to take HHA depth image as well
@@ -181,6 +181,9 @@ def create_loaders(
                                     Pad(crop_size, [123.675, 116.28 , 103.53], [111.0, 113.0, 133.0], ignore_label),
                                     RandomMirror(),
                                     RandomCrop(crop_size),
+                                    # 165 cutout size is ~1/3 of the 500 size image. a guess based on the 
+                                    #   paper's cifar-10 and cifar-100 values, given our 40 classes
+                                    RGBCutout([123.675, 116.28 , 103.53], 165), 
                                     Normalise(*normalise_params),
                                     ToTensor()])
     composed_val = transforms.Compose([Normalise(*normalise_params),
@@ -270,9 +273,6 @@ def train_segmenter(
     batch_time = AverageMeter()
     losses = AverageMeter()
     for i, sample in enumerate(train_loader):
-        #print("[train_segmenter] starting with sample " + str(i)) #############
-        #print("[train_segmenter] sample['image'] shape: " + str(sample['image'].shape)) #############
-        #print("[train_segmenter] sample['depth_image'] shape: " + str(sample['depth_image'].shape)) #############
         start = time.time()
         input = sample['image'].cuda()
         depth_input = sample['depth_image'].cuda()
@@ -280,12 +280,8 @@ def train_segmenter(
         input_var = torch.autograd.Variable(input).float()
         depth_input_var = torch.autograd.Variable(depth_input).float()
         target_var = torch.autograd.Variable(target).long()
-        #print("[train_segmenter] input_var shape: " + str(input_var.size())) ###############
-        #print("[train_segmenter] depth_input_var shape: " + str(depth_input_var.size())) ##########
         # Compute output
-        #print("[train_segmenter] computing output")  #############
         output = segmenter(input_var, depth_input_var)
-        #print("[train_segmenter] done computing output") ##########
         output = nn.functional.interpolate(output, size=target_var.size()[1:], mode='bilinear', align_corners=False)
         soft_output = nn.LogSoftmax()(output)
         # Compute loss and backpropagate
@@ -326,8 +322,20 @@ def validate(
         for i, sample in enumerate(val_loader):
             start = time.time()
             input = sample['image']
+            ### uncomment to save input image to file
+            cv2.imwrite("val-tmp/" + str(i) + "-input.png", 
+                    input.data.cpu().numpy().squeeze(0).transpose(1,2,0) * 100) ########
+            ###
             depth_input = sample['depth_image']
+            ### uncomment to save input depth image to file
+            cv2.imwrite("val-tmp/" + str(i) + "-depth-image.png", 
+                    depth_input.data.cpu().numpy().squeeze(0).transpose(1,2,0) * 100) #######
+            ###
             target = sample['mask']
+            ### uncomment to save target label image to file
+            cv2.imwrite("val-tmp/" + str(i) + "-target.png", 
+                    target.data.cpu().numpy().astype(np.uint8).squeeze(0)) ######
+            ###
             input_var = torch.autograd.Variable(input).float().cuda()
             depth_input_var = torch.autograd.Variable(depth_input).float().cuda()
             # Compute output
@@ -335,6 +343,9 @@ def validate(
             output = cv2.resize(output[0, :num_classes].data.cpu().numpy().transpose(1, 2, 0),
                                 target.size()[1:][::-1],
                                 interpolation=cv2.INTER_CUBIC).argmax(axis=2).astype(np.uint8)
+            ### uncomment to save output image to file
+            cv2.imwrite("val-tmp/" + str(i) + "-output.png", output) #####
+            ###
             # Compute IoU
             gt = target[0].data.cpu().numpy().astype(np.uint8)
             gt_idx = gt < num_classes # Ignore every class index larger than the number of classes
@@ -364,7 +375,7 @@ def main():
     torch.backends.cudnn.deterministic = True
     torch.manual_seed(args.random_seed)
     if torch.cuda.is_available():
-        print("cuda available -----------------")############
+        print("cuda available ------------------")############
         print("cuda device: " + str(torch.cuda.current_device())) ###########
         print("cuda device name: " + torch.cuda.get_device_name(torch.cuda.current_device())) ########
         print("---------------------------------")############
