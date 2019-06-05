@@ -177,6 +177,7 @@ class RefineNet(nn.Module):
             if fancy_upsample:
                 # learnable upsample with a single (strided) transpose convolution (for now)
                 self.upsample = nn.ConvTranspose2d(inplanes_hr, inplanes_hr, kernel_size=3, stride=2, padding=1)
+                #self.upsample = nn.ConvTranspose2d(inplanes_hr, inplanes_hr, kernel_size=5, stride=2, padding=2)
 
         # CRP and RCU for fusion result
         outplanes = inplanes_hr if inplanes_hr != None else inplanes_lr

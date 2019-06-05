@@ -75,6 +75,7 @@ class Pad(object):
                          mode='constant',
                          constant_values=self.depth_img_val[c]) for c in range(3)], axis=2)
         mask = np.pad(mask, pad, mode='constant', constant_values=self.msk_val)
+
         return {'image': image, 'depth_image': depth_image, 'mask': mask}
 
 ### modified to take HHA depth image as well
@@ -134,13 +135,12 @@ class RGBCutout(object):
         # fully contained in the image (only the center must be),  as per the Cutout paper
         y = np.random.randint(0, h)
         x = np.random.randint(0, w)
-        
-        image[min(0, y - self.cutout_size / 2) : max(y + self.cutout_size / 2, h),
-              min(0, x - self.cutout_size / 2) : max(x + self.cutout_size / 2, w),
-              : ] = blank_val
 
-        print("rgb image shape after RGBCutout transform: " + str(image.shape)) #####
-        print("hha image shape after RGBCutout transform: " + str(depth_image.shape)) #####
+        radius = int(self.cutout_size / 2)
+        image[max(0, y - radius) : min(y + radius, h),
+              max(0, x - radius) : min(x + radius, w),
+              : ] = self.blank_val
+
         return {'image': image, 'depth_image': depth_image, 'mask': mask}
 
 ### modified to take HHA depth image as well
@@ -213,6 +213,7 @@ class ToTensor(object):
 
     def __call__(self, sample):
         image, depth_image, mask = sample['image'], sample['depth_image'], sample['mask']
+
         # swap color axis because
         # numpy image: H x W x C
         # torch image: C X H X W
@@ -221,6 +222,10 @@ class ToTensor(object):
         depth_image = depth_image.transpose((2, 0, 1))
         depth_image = torch.from_numpy(depth_image)
         mask = torch.from_numpy(mask)
+
+        ### to validate on zeroed out RGB data, uncommend this line ...
+        #sample['image'][:,:] = [123.675, 116.28, 103.53] #########
+
         return {'image': image, 'depth_image': depth_image, 'mask': mask}
 
 class NYUDataset(Dataset):
@@ -245,6 +250,13 @@ class NYUDataset(Dataset):
         self.transform_trn = transform_trn
         self.transform_val = transform_val
         self.stage = 'train'
+
+        ### to validate more quickly, uncomment this to set the training set to be only 3 samples ...
+        #if len(self.datalist) == 795:
+        #    print("shrinking data list for training set. currently length is " + str(len(self.datalist)))
+        #    self.datalist = self.datalist[:3]
+        #    print("now it is " + str(len(self.datalist)))
+        ###
 
     def set_stage(self, stage):
         self.stage = stage
@@ -276,4 +288,5 @@ class NYUDataset(Dataset):
                 sample = self.transform_val(sample)
         #print("rgb image shape after transform: " + str(sample['image'].shape))
         #print("hha image shape after transform: " + str(sample['depth_image'].shape))
+
         return sample
